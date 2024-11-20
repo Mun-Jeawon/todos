@@ -90,6 +90,14 @@ class _TodoPageState extends State<TodoPage> {
   void _updateTodoList() {
     widget.onTodoListChanged(_todoList); // 콜백 함수 호출
   }
+  Future<void> _updateTodoInFirestore(Todo todo) async {
+    final todoCollection = FirebaseFirestore.instance.collection('todos');
+    try {
+      await todoCollection.doc(todo.id).update(todo.toMap());
+    } catch (e) {
+      print("Error updating todo: $e");
+    }
+  }
 
   // Firestore에서 할 일 목록 읽기
   Future<void> _loadTodos() async {
@@ -98,10 +106,13 @@ class _TodoPageState extends State<TodoPage> {
 
     setState(() {
       _todoList = snapshot.docs
-          .map((doc) => Todo.fromFirestore(doc)) // Firestore에서 Todo 객체로 변환
+          .map((doc) => Todo.fromFirestore(doc))  // Firestore에서 Todo 객체로 변환
           .toList();
+      _updateTodoList();
     });
+    widget.onTodoListChanged(_todoList); // 상위 위젯에 변경 알림
   }
+
 
   // Firestore에 할 일 추가
   Future<void> _addTodoToFirestore(Todo todo) async {
@@ -126,15 +137,6 @@ class _TodoPageState extends State<TodoPage> {
     }
   }
 
-  Future<void> _updateTodoInFirestore(Todo todo) async {
-    final todoCollection = FirebaseFirestore.instance.collection('todos');
-    try {
-      await todoCollection.doc(todo.id).update(todo.toMap());
-    } catch (e) {
-      print("Error updating todo: $e");
-      // 오류 처리 로직 추가
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -254,31 +256,28 @@ class _TodoPageState extends State<TodoPage> {
   void _showTodoDetails(BuildContext context, Todo todo) {
     showModalBottomSheet(
       context: context,
-      shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       isScrollControlled: true,
-      builder: (context) =>
-          FractionallySizedBox(
-            heightFactor: 0.5,
-            child: Padding(
-              padding: const EdgeInsets.all(20.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(todo.title, style: TextStyle(
-                      fontSize: 24, fontWeight: FontWeight.bold)),
-                  SizedBox(height: 10),
-                  _buildMemoField(todo),
-                  SizedBox(height: 10),
-                  _buildAlarmAndRepeatRow(todo),
-                  SizedBox(height: 20),
-                  _buildCompletionButton(todo),
-                  Divider(),
-                  _buildDeleteButton(todo),
-                ],
-              ),
-            ),
+      builder: (context) => FractionallySizedBox(
+        heightFactor: 0.5,
+        child: Padding(
+          padding: const EdgeInsets.all(20.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(todo.title, style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+              SizedBox(height: 10),
+              _buildMemoField(todo),
+              SizedBox(height: 10),
+              _buildAlarmAndRepeatRow(todo),
+              SizedBox(height: 20),
+              _buildCompletionButton(todo),
+              Divider(),
+              _buildDeleteButton(todo),
+            ],
           ),
+        ),
+      ),
     );
   }
 
@@ -286,13 +285,10 @@ class _TodoPageState extends State<TodoPage> {
   Widget _buildMemoField(Todo todo) {
     return TextFormField(
       initialValue: todo.memo,
-      onChanged: (value) =>
-          setState(() {
-            todo.memo = value
-                .trim()
-                .isEmpty ? null : value;
-            _updateTodoList();
-          }),
+      onChanged: (value) => setState(() {
+        todo.memo = value.trim().isEmpty ? null : value;
+        _updateTodoList();
+      }),
       decoration: InputDecoration(
         hintText: todo.memo?.isEmpty ?? true ? '메모' : '',
         hintStyle: TextStyle(color: Colors.grey),
@@ -464,11 +460,11 @@ class _TodoPageState extends State<TodoPage> {
   // 완료 버튼
   Widget _buildCompletionButton(Todo todo) {
     return ElevatedButton(
-      onPressed: () {
+      onPressed: () async{
         setState(() {
           todo.isDone = !todo.isDone;
         });
-        _updateTodoList();
+        await _updateTodoInFirestore(todo);
         Navigator.pop(context);
       },
       child: Text(todo.isDone ? '완료 취소' : '완료하기'),
@@ -479,6 +475,7 @@ class _TodoPageState extends State<TodoPage> {
   Widget _buildDeleteButton(Todo todo) {
     return ElevatedButton.icon(
       onPressed: () {
+
         showDialog(
           context: context,
           builder: (BuildContext context) {
