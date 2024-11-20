@@ -39,7 +39,6 @@ class Todo {
     };
   }
 
-
   // Firestore의 데이터를 Todo 객체로 변환
   static Todo fromFirestore(DocumentSnapshot doc) {
     final data = doc.data() as Map<String, dynamic>;
@@ -341,7 +340,7 @@ class _TodoPageState extends State<TodoPage> {
       ),
     );
   }
-/////////////////////////////////////////////////
+
   // 알림 시간 선택기
   Future<void> _selectAlarmTime(BuildContext context, Todo todo) async {
     TimeOfDay? newTime = await showTimePicker(
@@ -358,21 +357,17 @@ class _TodoPageState extends State<TodoPage> {
   }
 
   // 반복 옵션 선택기
-  Future<void> _selectRepeatOption(BuildContext context, Todo todo) async {
+  void _selectRepeatOption(BuildContext context, Todo todo) async {
     String? selectedRepeat = await showDialog<String>(
       context: context,
-      builder: (context) {
+      builder: (BuildContext context) {
         return SimpleDialog(
           title: Text('반복 설정'),
-          children: [
-            SimpleDialogOption(child: Text('매일'),
-                onPressed: () => Navigator.pop(context, '매일')),
-            SimpleDialogOption(child: Text('매주'),
-                onPressed: () => Navigator.pop(context, '매주')),
-            SimpleDialogOption(child: Text('매월'),
-                onPressed: () => Navigator.pop(context, '매월')),
-            SimpleDialogOption(child: Text('반복 안 함'),
-                onPressed: () => Navigator.pop(context, null)),
+          children: <Widget>[
+            _buildRepeatOptionDialog('매일'),
+            _buildRepeatOptionDialog('매주'),
+            _buildRepeatOptionDialog('매월'),
+            _buildRepeatOptionDialog('반복 안함'),
           ],
         );
       },
@@ -383,17 +378,68 @@ class _TodoPageState extends State<TodoPage> {
         if (selectedRepeat == '매일') {
           todo.repeatDays = ['월', '화', '수', '목', '금', '토', '일'];
         } else if (selectedRepeat == '매주') {
-          // '매주' 선택 시 요일 선택 다이얼로그 표시
+          todo.repeatDays = ['월', '화', '수', '목', '금', '토', '일'];
           _selectWeekDays(context, todo);
+        } else if (selectedRepeat == '매월') {
+          todo.repeatDays = [];
         } else if (selectedRepeat == '반복 안함') {
           todo.repeatDays = [];
         }
         _generateFutureDates(todo);
       });
-      await _updateTodoInFirestore(todo); // Firestore에서 할 일 업데이트
-      _generateFutureDates(todo);
       _updateTodoList();
     }
+  }
+
+  Future<void> _generateFutureDates(Todo todo) async {
+    if (todo.repeat == null || todo.alarmTime == null) {
+      todo.futureDates = null;
+      return;
+    }
+
+    List<Todo> futureTodos = [];
+    DateTime currentDate = todo.date;
+
+    for (int i = 0; i < 52; i++) { // 1년치 생성
+      switch (todo.repeat) {
+        case '매일':
+          currentDate = currentDate.add(Duration(days: 1));
+          break;
+        case '매주':
+          if (todo.repeatDays.isNotEmpty) {
+            do {
+              currentDate = currentDate.add(Duration(days: 1));
+            } while (!todo.repeatDays.contains(['월', '화', '수', '목', '금', '토', '일'][currentDate.weekday - 1]));
+          }
+          break;
+        case '매월':
+        // 다음 달의 같은 날짜로 설정
+          currentDate = DateTime(currentDate.year, currentDate.month + 1, currentDate.day);
+          // 만약 다음 달에 해당 날짜가 없다면 (예: 1월 31일 -> 2월 28일)
+          if (currentDate.day != todo.date.day) {
+            currentDate = DateTime(currentDate.year, currentDate.month, 0); // 해당 월의 마지막 날로 설정
+          }
+          break;
+        default:
+          return;
+      }
+
+      Todo newTodo = Todo(
+        title: todo.title,
+        date: currentDate,
+        memo: todo.memo,
+        alarmTime: todo.alarmTime,
+        repeat: todo.repeat,
+        repeatDays: todo.repeatDays,
+      );
+      futureTodos.add(newTodo);
+      await _addTodoToFirestore(newTodo); // 새로운 할 일을 Firestore에 추가
+    }
+
+    setState(() {
+      _todoList.addAll(futureTodos);
+    });
+    _updateTodoList();
   }
 
   // 옵션 박스 스타일링
@@ -446,7 +492,8 @@ class _TodoPageState extends State<TodoPage> {
                 ),
                 TextButton(
                   child: Text('삭제'),
-                  onPressed: () {
+                  onPressed: () async {
+                    await _deleteTodoFromFirestore(todo.id);
                     setState(() {
                       _todoList.remove(todo);
                     });
@@ -458,7 +505,18 @@ class _TodoPageState extends State<TodoPage> {
                 if (todo.repeat != null)
                   TextButton(
                     child: Text('일정에서 전체 삭제'),
-                    onPressed: () {
+                    onPressed: () async {
+                      // 데이터베이스에서 관련된 모든 일정 삭제
+                      List<Todo> relatedTodos = _todoList.where((t) =>
+                      t.title == todo.title &&
+                          t.repeat == todo.repeat &&
+                          t.alarmTime == todo.alarmTime
+                      ).toList();
+
+                      for (var relatedTodo in relatedTodos) {
+                        await _deleteTodoFromFirestore(relatedTodo.id);
+                      }
+
                       setState(() {
                         _todoList.removeWhere((t) =>
                         t.title == todo.title &&
@@ -485,7 +543,7 @@ class _TodoPageState extends State<TodoPage> {
   }
 
   // 새 할 일 추가 다이얼로그
-  void _addNewTodoDialog() async {
+  void _addNewTodoDialog()  {
     TextEditingController _controller = TextEditingController();
 
     showDialog(
@@ -543,65 +601,6 @@ class _TodoPageState extends State<TodoPage> {
   bool isSameDay(DateTime date1, DateTime date2) {
     return date1.year == date2.year && date1.month == date2.month &&
         date1.day == date2.day;
-  }
-  void _generateFutureDates(Todo todo) async {
-    if (todo.repeat == null || todo.alarmTime == null) {
-      todo.futureDates = null;
-      return;
-    }
-
-    List<Todo> futureTodos = [];
-    DateTime currentDate = todo.date; // 원래 날짜부터 시작
-
-    // 1년치의 반복 일정을 생성
-    for (int i = 0; i < 52; i++) {
-      switch (todo.repeat) {
-        case '매일':
-        // 매일 반복: 첫 번째 반복을 제외하고 하루씩 증가
-          if (i > 0) {
-            currentDate = currentDate.add(Duration(days: 1));
-          }
-          break;
-        case '매주':
-        // 매주 반복: 첫 번째 반복을 제외하고 선택된 요일까지 날짜 증가
-          if (i > 0) {
-            do {
-              currentDate = currentDate.add(Duration(days: 1));
-            } while (!todo.repeatDays.contains(
-                ['월', '화', '수', '목', '금', '토', '일'][currentDate.weekday - 1]));
-          }
-          break;
-        case '매월':
-        // 매월 반복: 첫 번째 반복을 제외하고 한 달씩 증가
-          if (i > 0) {
-            currentDate = DateTime(
-                currentDate.year, currentDate.month + 1, currentDate.day);
-          }
-          break;
-        default:
-          return; // 알 수 없는 반복 패턴
-      }
-
-      // 새로운 Todo 객체 생성 및 리스트에 추가
-      if (i > 0 || todo.repeat == '매일') {
-        Todo newTodo = Todo(
-          title: todo.title,
-          date: currentDate,
-          memo: todo.memo,
-          alarmTime: todo.alarmTime,
-          repeat: todo.repeat,
-          repeatDays: todo.repeatDays,
-        );
-        futureTodos.add(newTodo);
-        await _addTodoToFirestore(newTodo); // 새로운 할 일을 Firestore에 추가
-      }
-    }
-
-    // 생성된 반복 일정을 기존 리스트에 추가
-    setState(() {
-      _todoList.addAll(futureTodos);
-    });
-    _updateTodoList();
   }
 
 // 특정 날짜의 Todo 항목들을 반환하는 함수
@@ -783,11 +782,11 @@ class _TodoPageState extends State<TodoPage> {
     showDialog(
       context: context,
       builder: (BuildContext context) {
-        return AlertDialog(
-          title: Text('요일 선택'),
-          content: StatefulBuilder(
-            builder: (BuildContext context, StateSetter setState) {
-              return Wrap(
+        return StatefulBuilder(
+          builder: (BuildContext context, StateSetter setState) {
+            return AlertDialog(
+              title: Text('요일 선택'),
+              content: Wrap(
                 spacing: 5,
                 children: ['월', '화', '수', '목', '금', '토', '일'].map((day) {
                   return FilterChip(
@@ -804,22 +803,23 @@ class _TodoPageState extends State<TodoPage> {
                     },
                   );
                 }).toList(),
-              );
-            },
-          ),
-          actions: <Widget>[
-            TextButton(
-              child: Text('확인'),
-              onPressed: () {
-                Navigator.of(context).pop();
-                _generateFutureDates(todo);
-              },
-            ),
-          ],
+              ),
+              actions: <Widget>[
+                TextButton(
+                  child: Text('확인'),
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                    _generateFutureDates(todo);
+                  },
+                ),
+              ],
+            );
+          },
         );
       },
     );
   }
+
   SimpleDialogOption _buildRepeatOptionDialog(String option) {
     return SimpleDialogOption(
       onPressed: () {
